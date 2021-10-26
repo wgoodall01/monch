@@ -1,0 +1,7 @@
+[workspace]
+members = [
+	"monch_syntax",
+	"monch_io",
+	"monch_shell",
+	"monch_util_ls",
+]

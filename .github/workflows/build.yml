@@ -1,0 +1,39 @@
+name: Build
+
+on:
+  push:
+    tags: ["*"]
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: rustup show
+
+      - name: Cache Dependencies
+        uses: actions/cache@v2.1.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: >-
+            test_os-${{ runner.os }}_rust-${{ matrix.rust }}-${{ hashFiles('rust-toolchain') }}_cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            test_os-${{ runner.os }}_rust-${{ matrix.rust }}-${{ hashFiles('rust-toolchain') }}
+
+      - name: Build for tests
+        run: cargo test --no-run --verbose
+
+      - name: Run tests
+        run: cargo test
+        env:
+          RUST_BACKTRACE: 1
