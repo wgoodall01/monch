@@ -1,0 +1,30 @@
+# Basic parser test for Monch syntax
+# The parser should be able to understand everything listed here
+
+# Command invocations with bare terms
+echo one two three
+
+# Command invocations with double-quoted terms
+echo "one" "two" "three"
+
+# Command invocations with mixed bare, single- and double-quoted terms
+echo "one" 'two' three
+
+# Comments anywhere
+echo arg2 arg2 # not parsed arg3
+
+# Bare arguments
+ls -l --inode
+ls --quoting-style 'shell'
+
+# Pipes
+ls | xargs 'cat'
+
+# Output redirection
+ls >file_listing.txt
+
+# Input redirection 
+cat <file_listing.txt
+
+# Everything at once
+'first quoted cmd' <'input file' bare "doublequote" | second-cmd >output-file "arg" # and a comment

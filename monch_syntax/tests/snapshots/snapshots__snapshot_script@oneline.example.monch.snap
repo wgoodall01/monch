@@ -1,0 +1,31 @@
+---
+source: monch_syntax/tests/snapshots.rs
+expression: parsed
+input_file: monch_syntax/tests/fixtures/oneline.example.monch
+
+---
+commands:
+  - pipeline:
+      - executable:
+          Literal:
+            value: command
+        arguments:
+          - Literal:
+              value: one
+          - Literal:
+              value: two
+          - Literal:
+              value: again
+          - Literal:
+              value: three
+        stdin_redirect:
+          File:
+            file:
+              Literal:
+                value: input
+        stdout_redirect:
+          AppendFile:
+            file:
+              Literal:
+                value: output
+

@@ -1,0 +1,33 @@
+WHITESPACE = _{ " " }
+COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* }
+GAP = _{ " " | EOI } // for mandatory whitespace
+
+// Inputs: things that consume EOI
+CommandInput = { SOI ~ Command ~ EOI }
+ScriptInput = { SOI ~ ((COMMENT | Command)? ~ NEWLINE)* ~ NEWLINE? ~ EOI}
+
+Term = {
+	BareTerm | 
+	SingleQuotedStringLiteral |
+	DoubleQuotedStringLiteral
+}
+BareTerm = ${ (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+ }
+SingleQuotedStringLiteral = ${ "'" ~ (!"'" ~ ANY)* ~ "'" }
+DoubleQuotedStringLiteral = ${ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+// Read-redirects
+ReadRedirect = { RRedirFile }
+RRedirFile = { "<" ~ Term }
+
+// Write-redirects
+WriteRedirect = { WRedirTruncateFile | WRedirAppendFile }
+WRedirTruncateFile = { ">" ~ Term }
+WRedirAppendFile = { ">>" ~ Term }
+
+// A single command invocation, followed optionally by some arguments.
+Invocation = { Term ~ (Term | ReadRedirect | WriteRedirect)* }
+
+// A command composed potentially of several commands piped together.
+Command = { Invocation ~ ("|" ~ Invocation)* }
+
+

@@ -1,0 +1,144 @@
+---
+source: monch_syntax/tests/snapshots.rs
+expression: parsed
+input_file: monch_syntax/tests/fixtures/basic.example.monch
+
+---
+commands:
+  - pipeline:
+      - executable:
+          Literal:
+            value: echo
+        arguments:
+          - Literal:
+              value: one
+          - Literal:
+              value: two
+          - Literal:
+              value: three
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: echo
+        arguments:
+          - Literal:
+              value: one
+          - Literal:
+              value: two
+          - Literal:
+              value: three
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: echo
+        arguments:
+          - Literal:
+              value: one
+          - Literal:
+              value: two
+          - Literal:
+              value: three
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: echo
+        arguments:
+          - Literal:
+              value: arg2
+          - Literal:
+              value: arg2
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: ls
+        arguments:
+          - Literal:
+              value: "-l"
+          - Literal:
+              value: "--inode"
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: ls
+        arguments:
+          - Literal:
+              value: "--quoting-style"
+          - Literal:
+              value: shell
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: ls
+        arguments: []
+        stdin_redirect: ~
+        stdout_redirect: ~
+      - executable:
+          Literal:
+            value: xargs
+        arguments:
+          - Literal:
+              value: cat
+        stdin_redirect: ~
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: ls
+        arguments: []
+        stdin_redirect: ~
+        stdout_redirect:
+          TruncateFile:
+            file:
+              Literal:
+                value: file_listing.txt
+  - pipeline:
+      - executable:
+          Literal:
+            value: cat
+        arguments: []
+        stdin_redirect:
+          File:
+            file:
+              Literal:
+                value: file_listing.txt
+        stdout_redirect: ~
+  - pipeline:
+      - executable:
+          Literal:
+            value: first quoted cmd
+        arguments:
+          - Literal:
+              value: bare
+          - Literal:
+              value: doublequote
+        stdin_redirect:
+          File:
+            file:
+              Literal:
+                value: input file
+        stdout_redirect: ~
+      - executable:
+          Literal:
+            value: second-cmd
+        arguments:
+          - Literal:
+              value: arg
+        stdin_redirect: ~
+        stdout_redirect:
+          TruncateFile:
+            file:
+              Literal:
+                value: output-file
+

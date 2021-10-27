@@ -1,0 +1,1 @@
+command one 'two' 'again' "three" >>output <input
