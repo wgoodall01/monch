@@ -1,19 +1,11 @@
+use crate::builtin::BUILTINS;
+use crate::exe::{Execute, Exit, ExternalExecutable, Wait};
 use crate::streams::{stream_pipe, ReadStream, Streams, WriteStream};
+use crate::Error;
 use itertools::zip;
 use monch_syntax::ast;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::{fs, io, process};
-use thiserror::Error;
-use which::which;
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("io: {0}")]
-    Io(#[from] io::Error),
-
-    #[error("command not found: '{cmd}'")]
-    ResolveBinary { cmd: String, source: which::Error },
-}
 
 // TODO: settings, like 'set -e', pipefail, and the like
 // TODO: perhaps some kind of mock execution for testing
@@ -23,20 +15,30 @@ pub struct Interpreter {
     ios: Streams,
 
     /// Current working directory
-    working_dir: PathBuf,
+    current_dir: PathBuf,
 }
 
 impl Interpreter {
     /// Create a new Interpreter using the given streams for I/O
-    pub fn new(ios: Streams, working_dir: &Path) -> Interpreter {
+    pub fn new(ios: Streams, current_dir: &Path) -> Interpreter {
         Interpreter {
             ios,
-            working_dir: working_dir.to_path_buf(),
+            current_dir: current_dir.to_path_buf(),
         }
     }
 
+    /// Get the current working directory of the Interpreter
+    pub fn current_dir(&self) -> &Path {
+        &self.current_dir
+    }
+
+    /// Set the current working directory of the Interpreter
+    pub fn set_current_dir(&mut self, new_cwd: impl AsRef<Path>) {
+        self.current_dir = new_cwd.as_ref().into();
+    }
+
     /// Evaluate the given command, returning its exit code.
-    pub fn eval_command(&mut self, cmd: &ast::Command) -> Result<i32, Error> {
+    pub fn eval_command(&mut self, cmd: &ast::Command) -> Result<Exit, Error> {
         let n_invocations = cmd.pipeline.len();
 
         // Figure out all the io [`Streams`] configuration we're going to need for each process
@@ -71,7 +73,7 @@ impl Interpreter {
 
                 // Open the file.
                 let name = self.eval_term(name_term)?;
-                let path: PathBuf = self.working_dir.join(name);
+                let path: PathBuf = self.current_dir.join(name);
                 let file = opts.open(&path)?;
                 WriteStream::File(file)
             } else if last {
@@ -93,7 +95,7 @@ impl Interpreter {
                     ast::ReadRedirect::File { file } => file,
                 };
                 let name = self.eval_term(name_term)?;
-                let path: PathBuf = self.working_dir.join(name);
+                let path: PathBuf = self.current_dir.join(name);
                 let file = fs::File::open(&path)?;
                 ReadStream::File(file)
             } else if first {
@@ -132,17 +134,8 @@ impl Interpreter {
         }
 
         // Configure all the processes, consuming the IO streams
-        let mut cmds: Vec<process::Command> = Vec::with_capacity(n_invocations);
+        let mut children: Vec<Box<dyn Wait>> = Vec::with_capacity(n_invocations);
         for (inv, ios) in zip(&cmd.pipeline, ios.into_iter()) {
-            // Evaluate the name of the binary
-            let bin_name = self.eval_term(&inv.executable)?;
-
-            // Resolve the name of that binary path
-            let bin_path = which(&bin_name).map_err(|source| Error::ResolveBinary {
-                cmd: bin_name.clone(),
-                source,
-            })?;
-
             // Evaluate all the arguments
             let args: Vec<String> = inv
                 .arguments
@@ -150,38 +143,42 @@ impl Interpreter {
                 .map(|t| self.eval_term(t))
                 .collect::<Result<_, _>>()?;
 
-            // Create the command
-            let mut cmd = process::Command::new(bin_path);
-            cmd.args(args);
+            // Get the args as an &[&str]
+            let args_ref: &[&str] = &args.iter().map(String::as_str).collect::<Vec<_>>();
 
-            // Hook up the IO
-            cmd.stdin(ios.stdin);
-            cmd.stdout(ios.stdout);
-            cmd.stderr(ios.stderr);
+            // Evaluate the name of the binary
+            let bin_name = self.eval_term(&inv.executable)?;
 
-            // Add the command to the list
-            cmds.push(cmd);
+            // Look up the binary name in the set of builtins
+            // Note: this lookup is case-sensitive.
+            let boxed_exe: Box<dyn Execute>; // place to own new [`Execute`]s if we make them
+            let exe: &dyn Execute = if let Some(builtin) = BUILTINS.get(bin_name.as_str()) {
+                // We're running an in-process builtin
+                *builtin
+            } else {
+                // We're running an external program
+                boxed_exe = Box::new(ExternalExecutable(bin_name));
+                &*boxed_exe
+            };
+
+            // Start up the child proces, with its IO hooked up correctly
+            let child = exe.execute(self, ios, args_ref)?;
+
+            children.push(child);
         }
 
-        // Start all the child processes
-        let children = cmds
-            .into_iter()
-            .map(|mut c| c.spawn())
-            .collect::<Result<Vec<_>, _>>()?;
-
         // Wait for all the child processes to finish
-        let exit_statuses = children
+        let exit_codes: Vec<Exit> = children
             .into_iter()
-            .map(|mut c| c.wait())
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|c| c.wait())
+            .collect::<Result<_, Error>>()?;
 
-        // Figure out the first nonzero exit code, if we have it, otherwise return 0.
-        let exit = exit_statuses
+        // Come up with an exit status that represents the entire pipeline.
+        // We use Bash's `&&` logic here by default.
+        let exit = exit_codes
             .into_iter()
-            .map(|es| es.code())
-            .flatten() // ignore None values from processes killed by signals
-            .find(|code| *code != 0)
-            .unwrap_or(0);
+            .reduce(Exit::reduce_worst) // Pick the worst of their exit codes
+            .unwrap_or(Exit::SUCCESS); // If we don't have any children, return success.
 
         Ok(exit)
     }

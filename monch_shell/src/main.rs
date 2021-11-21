@@ -2,9 +2,15 @@ use monch_syntax::Parser;
 use rustyline::error::ReadlineError;
 use std::env;
 
+pub(crate) mod builtin;
+pub(crate) mod exe;
 pub(crate) mod interpreter;
 pub(crate) mod streams;
 
+mod error;
+pub use error::Error;
+
+use exe::Exit;
 use interpreter::Interpreter;
 use streams::Streams;
 
@@ -17,36 +23,45 @@ fn main() {
     let mut interpreter = Interpreter::new(stdio, &workdir);
     let parser = Parser::new();
 
-    let mut last_exit_code: i32 = 0;
+    // Keep track of the last exit code we've seen
+    let mut last_exit = Exit::SUCCESS;
 
     loop {
-        let prompt = match last_exit_code {
-            0 => "monch$ ".to_string(),
-            n => format!("[{}] monch$ ", n),
+        let prompt = if last_exit.success() {
+            "monch $ ".to_string()
+        } else {
+            format!("[{}] monch $ ", last_exit)
         };
 
         match rl.readline(&prompt) {
             Ok(line) => {
                 // Ignore empty inputs. Technically they don't parse.
                 if line.trim().is_empty() {
-                    last_exit_code = 0;
+                    last_exit = Exit::SUCCESS;
                     continue;
                 }
 
+                // Parse the command line
                 let cmd = match parser.parse_command(&line) {
                     Ok(cmd) => cmd,
+
+                    // Handle parse errors by printing them, setting last_exit, and skipping
+                    // evaluation.
                     Err(e) => {
                         println!("monch: {}", e);
-                        last_exit_code = 127;
+                        last_exit = Exit::BAD_SYNTAX;
                         continue;
                     }
                 };
 
-                last_exit_code = match interpreter.eval_command(&cmd) {
+                // Evaluate the command line AST
+                last_exit = match interpreter.eval_command(&cmd) {
                     Ok(exit) => exit,
+
+                    // Handle errors by printing them and setting last_exit.
                     Err(e) => {
                         println!("monch: {}", e);
-                        127
+                        e.as_exit()
                     }
                 };
             }
