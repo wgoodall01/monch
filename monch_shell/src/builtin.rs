@@ -63,8 +63,11 @@ impl exe::Execute for Cd {
             exit!(Exit::FAILURE)
         }
 
-        int.set_current_dir(new_workdir);
+        let result = int.set_current_dir(new_workdir);
 
-        exit!(Exit::SUCCESS)
+        match result {
+            Ok(_) => exit!(Exit::SUCCESS),
+            Err(e) => exit!(e.as_exit()),
+        }
     }
 }

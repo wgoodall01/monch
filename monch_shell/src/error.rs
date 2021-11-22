@@ -12,6 +12,9 @@ pub enum Error {
 
     #[error("{cmd}: command not found: {source}")]
     ResolveBinary { cmd: String, source: which::Error },
+
+    #[error("invalid working directory '{0}'")]
+    BadWorkingDirectory(String),
 }
 
 impl Error {
@@ -20,6 +23,7 @@ impl Error {
             Error::Io(_) => Exit::FAILURE,
             Error::ExecutionFailed(_) => Exit::COULD_NOT_EXECUTE,
             Error::ResolveBinary { .. } => Exit::COMMAND_NOT_FOUND,
+            Error::BadWorkingDirectory(_) => Exit::FAILURE,
         }
     }
 }
