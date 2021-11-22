@@ -1,4 +1,5 @@
 use monch_syntax::Parser;
+use owo_colors::OwoColorize;
 use rustyline::error::ReadlineError;
 use std::env;
 
@@ -27,13 +28,7 @@ fn main() {
     let mut last_exit = Exit::SUCCESS;
 
     loop {
-        let prompt = if last_exit.success() {
-            "monch $ ".to_string()
-        } else {
-            format!("[{}] monch $ ", last_exit)
-        };
-
-        match rl.readline(&prompt) {
+        match rl.readline(&prompt(&interpreter, last_exit)) {
             Ok(line) => {
                 // Ignore empty inputs. Technically they don't parse.
                 if line.trim().is_empty() {
@@ -77,4 +72,25 @@ fn main() {
             }
         }
     }
+}
+
+/// Generate a shell prompt
+fn prompt(int: &Interpreter, last_exit: Exit) -> String {
+    // Generate the path segment
+    let cwd = int.current_dir();
+    let path_segment = cwd.to_string_lossy();
+
+    // Generate the error segment
+    let error_segment = if !last_exit.success() {
+        format!(" [{}]", last_exit)
+    } else {
+        "".to_string()
+    };
+
+    format!(
+        "{}{}{}",
+        path_segment.dimmed(),
+        error_segment.red(),
+        " $ ".purple().bold()
+    )
 }
