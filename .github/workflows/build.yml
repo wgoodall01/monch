@@ -8,7 +8,10 @@ on:
 
 jobs:
   test:
-    runs-on: "ubuntu-latest"
+    strategy:
+      matrix:
+        platform: ["ubuntu-20.04", "windows-2022", "macos-11"]
+    runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v2
@@ -26,9 +29,9 @@ jobs:
             ~/.cargo/git
             target
           key: >-
-            test_os-${{ runner.os }}_rust-${{ matrix.rust }}-${{ hashFiles('rust-toolchain') }}_cargo-${{ hashFiles('**/Cargo.lock') }}
+            test_os-${{ runner.os }}-${{ hashFiles('rust-toolchain') }}_cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            test_os-${{ runner.os }}_rust-${{ matrix.rust }}-${{ hashFiles('rust-toolchain') }}
+            test_os-${{ runner.os }}-${{ hashFiles('rust-toolchain') }}
 
       - name: Build for tests
         run: cargo test --no-run --verbose
@@ -37,3 +40,32 @@ jobs:
         run: cargo test
         env:
           RUST_BACKTRACE: 1
+
+  build:
+    strategy:
+      matrix:
+        platform: ["ubuntu-20.04", "windows-2022", "macos-11"]
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: rustup show
+
+      - name: Cache Dependencies
+        uses: actions/cache@v2.1.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: >-
+            test_os-${{ runner.os }}-${{ hashFiles('rust-toolchain') }}_cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            test_os-${{ runner.os }}-${{ hashFiles('rust-toolchain') }}
+
+      - name: Build for release
+        run: cargo build --release --locked
