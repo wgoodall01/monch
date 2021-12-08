@@ -1,8 +1,9 @@
 use crate::builtin::BUILTINS;
 use crate::exe::{Execute, Exit, ExternalExecutable, Wait};
 use crate::streams::{stream_pipe, ReadStream, Streams, WriteStream};
+use crate::types::{can_connect, Ty};
 use crate::Error;
-use itertools::izip;
+use itertools::{izip, Itertools};
 use monch_syntax::ast;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -127,6 +128,11 @@ impl Interpreter {
             })
             .collect::<Result<_, _>>()?;
 
+        let arguments_as_ref: Vec<Vec<&str>> = arguments
+            .iter()
+            .map(|inv| inv.iter().map(String::as_str).collect())
+            .collect();
+
         // Configure all the processes, consuming the IO streams
         let mut executables: Vec<Box<dyn Execute>> = Vec::with_capacity(cmd.pipeline.len());
         for inv in &cmd.pipeline {
@@ -139,17 +145,28 @@ impl Interpreter {
             executables.push(exe)
         }
 
+        // Type-check the pipeline.
+        for ((l_inv, l_exe, l_args), (r_inv, r_exe, r_args)) in
+            izip!(&cmd.pipeline, &executables, &arguments_as_ref).tuple_windows()
+        {
+            let l_output = l_exe.output_type(l_args);
+            let r_input = r_exe.input_type(r_args);
+
+            if !can_connect(l_output, r_input) {
+                return Err(Error::TypeMismatch {
+                    l_cmd: self.eval_term(&l_inv.executable)?,
+                    l_ty: l_output,
+                    r_cmd: self.eval_term(&r_inv.executable)?,
+                    r_ty: r_input,
+                });
+            }
+        }
+
         // Start all the processes
         let mut children: Vec<Box<dyn Wait>> = Vec::with_capacity(cmd.pipeline.len());
-        for (exe, args, streams) in
-            izip!(executables.iter(), arguments.iter(), io_streams.into_iter())
-        {
-            // Get the args as an &[&str]
-            let args_ref: &[&str] = &args.iter().map(String::as_str).collect::<Vec<_>>();
-
+        for (exe, args, streams) in izip!(&executables, &arguments_as_ref, io_streams) {
             // Start up the child proces, with its IO hooked up correctly
-            let child = exe.execute(self, streams, args_ref)?;
-
+            let child = exe.execute(self, streams, args)?;
             children.push(child);
         }
 
@@ -194,7 +211,12 @@ impl Interpreter {
 
             // We found a binary on the MONCH_PATH.
             Ok(monch_bin) => {
-                let exe = ExternalExecutable::new(monch_bin);
+                let mut exe = ExternalExecutable::new(monch_bin);
+
+                // Because we found this program on MONCH_PATH, we're expecting CBOR
+                exe.set_input_type(Ty::Cbor);
+                exe.set_output_type(Ty::Cbor);
+
                 return Ok(Box::new(exe));
             }
         };
@@ -203,6 +225,8 @@ impl Interpreter {
         match which::which_in(bin_name, env::var_os("PATH"), self.current_dir()) {
             Ok(other_bin) => {
                 let exe = ExternalExecutable::new(other_bin);
+                // input and output types set by default in new()
+
                 Ok(Box::new(exe))
             }
 

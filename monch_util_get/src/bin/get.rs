@@ -1,6 +1,6 @@
 use anyhow::{Context, Error};
 use clap::Parser;
-use monch_io::{input_stream, log, put, DataPath, Value};
+use monch_io::{input_stream, put, DataPath, Value};
 
 // Note: the [`DataPath`] in [`Args`] has an implementation of [`FromStr`] that allows the [`Parser`] derive to
 // figure out how to parse it from the command line arguments.

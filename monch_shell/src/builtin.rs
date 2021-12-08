@@ -1,4 +1,4 @@
-use crate::{exe, Error, Exit, Interpreter, Streams};
+use crate::{exe, types::Ty, Error, Exit, Interpreter, Streams};
 use lazy_static::lazy_static;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -69,5 +69,13 @@ impl exe::Execute for Cd {
             Ok(_) => exit!(Exit::SUCCESS),
             Err(e) => exit!(e.as_exit()),
         }
+    }
+
+    fn input_type(&self, _: &[&str]) -> Ty {
+        Ty::Nothing
+    }
+
+    fn output_type(&self, _: &[&str]) -> Ty {
+        Ty::Nothing
     }
 }

@@ -1,4 +1,4 @@
-use crate::{interpreter::Interpreter, streams::Streams, Error};
+use crate::{interpreter::Interpreter, streams::Streams, types::Ty, Error};
 use std::path::{Path, PathBuf};
 use std::{fmt, process, thread};
 
@@ -14,6 +14,12 @@ pub trait Execute {
         ios: Streams,
         args: &[&str],
     ) -> Result<Box<dyn Wait>, Error>;
+
+    /// The type of data we're expecting to receive on stdin.
+    fn input_type(&self, _args: &[&str]) -> Ty;
+
+    /// The type of data we're going to output on stdout.
+    fn output_type(&self, _args: &[&str]) -> Ty;
 }
 
 /// Implement [`Execute`] for references to [`Execute`]
@@ -26,12 +32,23 @@ impl<T: Execute + ?Sized> Execute for &T {
     ) -> Result<Box<dyn Wait>, Error> {
         (*self).execute(int, ios, args)
     }
+
+    fn input_type(&self, args: &[&str]) -> Ty {
+        (*self).input_type(args)
+    }
+
+    fn output_type(&self, args: &[&str]) -> Ty {
+        (*self).input_type(args)
+    }
 }
 
 /// An implementation of [`Execute`] that will search for an external binary and execute it as a
 /// child process.
 pub struct ExternalExecutable {
     binary: PathBuf,
+
+    input_type: Ty,
+    output_type: Ty,
 }
 
 impl ExternalExecutable {
@@ -39,7 +56,25 @@ impl ExternalExecutable {
     pub fn new(path: impl AsRef<Path>) -> ExternalExecutable {
         ExternalExecutable {
             binary: path.as_ref().to_path_buf(),
+
+            // Default input to Any because that's the status quo: leave it to the program to
+            // handle bad input
+            input_type: Ty::Any,
+
+            // Default output to Unknown so you can't pipe it into anything that can't handle an
+            // Any
+            output_type: Ty::Unknown,
         }
+    }
+
+    /// Set the expected output type of this executable
+    pub fn set_output_type(&mut self, ty: Ty) {
+        self.output_type = ty;
+    }
+
+    /// Set the expected input type of this executable
+    pub fn set_input_type(&mut self, ty: Ty) {
+        self.input_type = ty;
     }
 }
 
@@ -65,6 +100,14 @@ impl Execute for ExternalExecutable {
         // Start the child, and return its join handle.
         let wait_handle = Box::new(cmd.spawn()?);
         Ok(wait_handle)
+    }
+
+    fn input_type(&self, _args: &[&str]) -> Ty {
+        self.input_type
+    }
+
+    fn output_type(&self, _args: &[&str]) -> Ty {
+        self.output_type
     }
 }
 
