@@ -4,4 +4,5 @@ members = [
 	"monch_io",
 	"monch_shell",
 	"monch_util_ls",
+	"monch_util_get",
 ]

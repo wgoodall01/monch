@@ -1,7 +1,9 @@
 use ciborium::value::Value;
+use std::fmt;
 use std::str::FromStr;
 
 /// Represents a path to get some nested data, like `.outer.inner.12.field`.
+#[derive(Debug, Clone)]
 pub struct DataPath(Vec<Value>);
 
 impl DataPath {
@@ -108,9 +110,30 @@ impl DataPath {
     }
 }
 
+impl fmt::Display for DataPath {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for part in &self.0 {
+            match part {
+                Value::Text(s) => write!(f, "{}", s)?,
+                Value::Integer(i) => write!(f, "{}", u64::try_from(*i).unwrap())?,
+                _ => unreachable!("format unknown path part"),
+            }
+        }
+        Ok(())
+    }
+}
+
 impl From<&str> for DataPath {
     fn from(text: &str) -> DataPath {
         DataPath::parse(text)
+    }
+}
+
+impl FromStr for DataPath {
+    type Err = String; // never constructed
+
+    fn from_str(text: &str) -> Result<DataPath, Self::Err> {
+        Ok(DataPath::parse(text))
     }
 }
 

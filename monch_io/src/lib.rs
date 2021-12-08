@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::io;
+use std::{io, iter};
 use thiserror::Error;
 
 /// Re-export the `cbor!` macro to implement our `put!` macro
 pub use ciborium::cbor;
+pub use ciborium::value::Value;
 
-pub mod path;
+mod path;
+pub use path::DataPath;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -61,7 +63,58 @@ pub fn write<T: Serialize>(object: &T) -> Result<(), Error> {
 }
 
 /// Read a deserializable object from structured stdin.
-pub fn read<'a, T: Deserialize<'a>>() -> Result<T, Error> {
+pub fn read_one<'a, T: Deserialize<'a>>() -> Result<T, Error> {
     let obj = ciborium::de::from_reader(io::stdin())?;
     Ok(obj)
+}
+
+/// Read a series of deserializable objects from structured stdin, stopping when stdin is closed.
+pub fn input_stream<T: Deserialize<'static>>() -> impl Iterator<Item = Result<T, Error>> {
+    // 64-byte input buffer. Short because input lines are short.
+    let buffer = io::BufReader::with_capacity(64, io::stdin());
+
+    // Construct an input parser iterator
+    InputParser {
+        buffer,
+        _phantom_type: Default::default(),
+    }
+}
+
+struct InputParser<T> {
+    buffer: io::BufReader<io::Stdin>,
+
+    // so that we can use the T generic without storing a T
+    _phantom_type: std::marker::PhantomData<T>,
+}
+
+impl<T: Deserialize<'static>> iter::Iterator for InputParser<T> {
+    type Item = Result<T, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::io::BufRead;
+
+        // Try to read the next 64 bytes of data into the buffer.
+        // This also lets us check for valid EOFs.
+        let readahead = self.buffer.fill_buf();
+        match readahead {
+            // Pass through IO errors to the calling program.
+            Err(e) => return Some(Err(Error::Io(e))),
+
+            // Handle EOFs by stopping iteration
+            Ok(buf) if buf.is_empty() => return None,
+
+            // Everything went well, try to read the object.
+            Ok(_) => {}
+        }
+
+        // Attempt to read one object.
+        let read_result = ciborium::de::from_reader(&mut self.buffer);
+        match read_result {
+            // The object read successfully.
+            Ok(obj) => Some(Ok(obj)),
+
+            // There was an error parsing, pass it through to userspace.
+            Err(e) => Some(Err(Error::Deserialize(e))),
+        }
+    }
 }

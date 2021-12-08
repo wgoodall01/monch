@@ -451,6 +451,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "monch_util_get"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "monch_io",
+ "serde",
+]
+
+[[package]]
 name = "monch_util_ls"
 version = "0.1.0"
 dependencies = [
