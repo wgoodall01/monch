@@ -1,6 +1,6 @@
 use crate::{interpreter::Interpreter, streams::Streams, Error};
+use std::path::{Path, PathBuf};
 use std::{fmt, process, thread};
-use which::which;
 
 /// An executable program or builtin.
 pub trait Execute {
@@ -16,9 +16,32 @@ pub trait Execute {
     ) -> Result<Box<dyn Wait>, Error>;
 }
 
+/// Implement [`Execute`] for references to [`Execute`]
+impl<T: Execute + ?Sized> Execute for &T {
+    fn execute(
+        &self,
+        int: &mut Interpreter,
+        ios: Streams,
+        args: &[&str],
+    ) -> Result<Box<dyn Wait>, Error> {
+        (*self).execute(int, ios, args)
+    }
+}
+
 /// An implementation of [`Execute`] that will search for an external binary and execute it as a
 /// child process.
-pub struct ExternalExecutable(pub String);
+pub struct ExternalExecutable {
+    binary: PathBuf,
+}
+
+impl ExternalExecutable {
+    /// Create a new ExternalExecutable, referencing the binary at the given path
+    pub fn new(path: impl AsRef<Path>) -> ExternalExecutable {
+        ExternalExecutable {
+            binary: path.as_ref().to_path_buf(),
+        }
+    }
+}
 
 impl Execute for ExternalExecutable {
     fn execute(
@@ -27,16 +50,8 @@ impl Execute for ExternalExecutable {
         ios: Streams,
         args: &[&str],
     ) -> Result<Box<dyn Wait>, Error> {
-        let command_name = self.0.as_str();
-
-        // Resolve the name of that binary path
-        let bin_path = which(&command_name).map_err(|source| Error::ResolveBinary {
-            cmd: command_name.to_string(),
-            source,
-        })?;
-
         // Create the command
-        let mut cmd = process::Command::new(bin_path);
+        let mut cmd = process::Command::new(&self.binary);
         cmd.args(args);
 
         // Set the working directory to that of the interpreter

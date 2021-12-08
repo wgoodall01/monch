@@ -2,7 +2,7 @@ use crate::builtin::BUILTINS;
 use crate::exe::{Execute, Exit, ExternalExecutable, Wait};
 use crate::streams::{stream_pipe, ReadStream, Streams, WriteStream};
 use crate::Error;
-use itertools::zip;
+use itertools::izip;
 use monch_syntax::ast;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ impl Interpreter {
         let name_term = match redir {
             ast::ReadRedirect::File { file } => file,
         };
-        let name = self.eval_term(&name_term)?;
+        let name = self.eval_term(name_term)?;
         let path: PathBuf = self.current_dir.join(name);
         let file = fs::File::open(&path)?;
         Ok(ReadStream::File(file))
@@ -84,7 +84,7 @@ impl Interpreter {
         };
 
         // Open the file.
-        let name = self.eval_term(&name_term)?;
+        let name = self.eval_term(name_term)?;
         let path: PathBuf = self.current_dir.join(name);
         let file = opts.open(&path)?;
         Ok(WriteStream::File(file))
@@ -115,33 +115,37 @@ impl Interpreter {
         // together.
         let io_streams: Vec<Streams> = self.make_stream_chain(pipeline_ends, cmd.pipeline.len())?;
 
+        // Evaluate all the command arguments
+        let arguments: Vec<Vec<String>> = cmd
+            .pipeline
+            .iter()
+            .map(|inv| {
+                inv.arguments
+                    .iter()
+                    .map(|t| self.eval_term(t))
+                    .collect::<Result<_, _>>()
+            })
+            .collect::<Result<_, _>>()?;
+
         // Configure all the processes, consuming the IO streams
-        let mut children: Vec<Box<dyn Wait>> = Vec::with_capacity(cmd.pipeline.len());
-        for (inv, streams) in zip(&cmd.pipeline, io_streams.into_iter()) {
-            // Evaluate all the arguments
-            let args: Vec<String> = inv
-                .arguments
-                .iter()
-                .map(|t| self.eval_term(t))
-                .collect::<Result<_, _>>()?;
-
-            // Get the args as an &[&str]
-            let args_ref: &[&str] = &args.iter().map(String::as_str).collect::<Vec<_>>();
-
+        let mut executables: Vec<Box<dyn Execute>> = Vec::with_capacity(cmd.pipeline.len());
+        for inv in &cmd.pipeline {
             // Evaluate the name of the binary
             let bin_name = self.eval_term(&inv.executable)?;
 
-            // Look up the binary name in the set of builtins
-            // Note: this lookup is case-sensitive.
-            let boxed_exe: Box<dyn Execute>; // place to own new [`Execute`]s if we make them
-            let exe: &dyn Execute = if let Some(builtin) = BUILTINS.get(bin_name.as_str()) {
-                // We're running an in-process builtin
-                *builtin
-            } else {
-                // We're running an external program
-                boxed_exe = Box::new(ExternalExecutable(bin_name));
-                &*boxed_exe
-            };
+            // Resolve the executable to an actual thing we can run
+            let exe = self.resolve_exe(&bin_name)?;
+
+            executables.push(exe)
+        }
+
+        // Start all the processes
+        let mut children: Vec<Box<dyn Wait>> = Vec::with_capacity(cmd.pipeline.len());
+        for (exe, args, streams) in
+            izip!(executables.iter(), arguments.iter(), io_streams.into_iter())
+        {
+            // Get the args as an &[&str]
+            let args_ref: &[&str] = &args.iter().map(String::as_str).collect::<Vec<_>>();
 
             // Start up the child proces, with its IO hooked up correctly
             let child = exe.execute(self, streams, args_ref)?;
@@ -163,6 +167,50 @@ impl Interpreter {
             .unwrap_or(Exit::SUCCESS); // If we don't have any children, return success.
 
         Ok(exit)
+    }
+
+    /// Resolve the name of a command into an Execute impl.
+    fn resolve_exe(&self, bin_name: &str) -> Result<Box<dyn Execute>, Error> {
+        use std::env;
+
+        // Try to look up a builtin with that name
+        if let Some(builtin) = BUILTINS.get(bin_name) {
+            return Ok(Box::new(builtin));
+        }
+
+        // Try to look up a program on the monch PATH
+        match which::which_in(bin_name, env::var_os("MONCH_PATH"), self.current_dir()) {
+            Err(e) => match e {
+                which::Error::CannotFindBinaryPath => {} // fall through to the other lookups
+
+                // If `which` has some other nasty error, return it.
+                _ => {
+                    return Err(Error::ResolveBinary {
+                        cmd: bin_name.to_string(),
+                        source: e,
+                    });
+                }
+            },
+
+            // We found a binary on the MONCH_PATH.
+            Ok(monch_bin) => {
+                let exe = ExternalExecutable::new(monch_bin);
+                return Ok(Box::new(exe));
+            }
+        };
+
+        // Try to look up a program on the system PATH
+        match which::which_in(bin_name, env::var_os("PATH"), self.current_dir()) {
+            Ok(other_bin) => {
+                let exe = ExternalExecutable::new(other_bin);
+                Ok(Box::new(exe))
+            }
+
+            Err(e) => Err(Error::ResolveBinary {
+                cmd: bin_name.to_string(),
+                source: e,
+            }),
+        }
     }
 
     /// Evaluate an [`ast::Term`] to a [`String`] value
@@ -193,8 +241,8 @@ impl Interpreter {
         }
 
         // Make a bunch of stderr clones, and attach them to every stage
-        for i in 1..length {
-            ios[i].stderr = ends.stderr.try_clone()?; // dup() the stream
+        for stream in ios.iter_mut().skip(1) {
+            stream.stderr = ends.stderr.try_clone()?; // dup() the stream
         }
         ios[0].stderr = ends.stderr; // move the stream, avoiding extra dup()
 

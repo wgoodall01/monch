@@ -11,26 +11,33 @@ use rustyline::validate::Validator;
 use rustyline::Context;
 use std::env;
 
-pub(crate) mod builtin;
-pub(crate) mod exe;
-pub(crate) mod interpreter;
-pub(crate) mod streams;
-
-mod error;
-pub use error::Error;
-
-use exe::Exit;
-use interpreter::Interpreter;
-use streams::Streams;
+use monch_shell::{Exit, Interpreter, Streams};
 
 fn main() {
+    #[cfg(debug_assertions)]
+    {
+        // Find the directory the current executable is stored in
+        let this_exe = env::current_exe().expect("couldn't get path to monch executable");
+        let monch_path = this_exe
+            .parent()
+            .expect("this executable must have a parent dir")
+            .canonicalize()
+            .expect("the parent dir of this executable must be canonicalizable");
+
+        // If we're a debug build, add the Cargo target directory to MONCH_PATH.
+        env::set_var("MONCH_PATH", monch_path);
+    }
+
+    // Set up readline
     let mut rl = rustyline::Editor::new();
     rl.set_helper(Some(Helper::new()));
 
+    // Set up the interpreter
     let stdio = Streams::stdio().expect("couldn't open stdio");
     let workdir = env::current_dir().expect("bad working directory");
-
     let mut interpreter = Interpreter::new(stdio, &workdir);
+
+    // Make a parser
     let parser = Parser::new();
 
     // Keep track of the last exit code we've seen

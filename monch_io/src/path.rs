@@ -13,7 +13,7 @@ impl DataPath {
     /// [`Integer`](cborium::Integer), or a String key.
     pub fn parse(path: &str) -> DataPath {
         let parsed_parts = path
-            .split(".")
+            .split('.')
             .filter(|part| !part.is_empty())
             .map(|part| {
                 // For each `.`-separated path segment...
@@ -25,7 +25,7 @@ impl DataPath {
                 }
 
                 // If it's not an integer, treat it as a string key.
-                return Value::Text(part.to_string());
+                Value::Text(part.to_string())
             })
             .collect();
 
