@@ -481,6 +481,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "monch_util_sed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "monch_io",
+ "serde",
+]
+
+[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
