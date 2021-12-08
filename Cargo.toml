@@ -5,4 +5,5 @@ members = [
 	"monch_shell",
 	"monch_util_ls",
 	"monch_util_get",
+	"monch_util_grep"
 ]

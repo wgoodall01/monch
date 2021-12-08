@@ -461,6 +461,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "monch_util_grep"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "monch_io",
+ "serde",
+]
+
+[[package]]
 name = "monch_util_ls"
 version = "0.1.0"
 dependencies = [
