@@ -5,6 +5,8 @@ use thiserror::Error;
 /// Re-export the `cbor!` macro to implement our `put!` macro
 pub use ciborium::cbor;
 
+pub mod path;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("{0}")]
