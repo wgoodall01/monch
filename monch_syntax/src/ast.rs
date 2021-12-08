@@ -8,12 +8,6 @@ pub struct Invocation {
 
     /// The `argv` we want to pass to that binary
     pub arguments: Vec<Term>,
-
-    /// Optionally, an input redirection (like `cat <file.txt`)
-    pub stdin_redirect: Option<ReadRedirect>,
-
-    /// Optionally, an output redirection (like `echo thing >out.txt`)
-    pub stdout_redirect: Option<WriteRedirect>,
 }
 
 /// A complete shell command
@@ -22,6 +16,12 @@ pub struct Command {
     /// The invocations which make up a pipeline, from left to right.
     /// The output of `pipeline[0]` connects to the input of `pipeline[1]`, and so on.
     pub pipeline: Vec<Invocation>,
+
+    /// Optionally, an input redirection (like `cat <file.txt`)
+    pub stdin_redirect: Option<ReadRedirect>,
+
+    /// Optionally, an output redirection (like `echo thing >out.txt`)
+    pub stdout_redirect: Option<WriteRedirect>,
 }
 
 /// A script: for now, just a list of commands

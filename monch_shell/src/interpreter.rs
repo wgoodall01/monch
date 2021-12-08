@@ -52,12 +52,68 @@ impl Interpreter {
         Ok(())
     }
 
+    /// Open a file for input redirection, returning the right ReadStream
+    fn eval_read_redirect(&self, redir: &ast::ReadRedirect) -> Result<ReadStream, Error> {
+        // Here, we have our input redirected. Open the file and connect that.
+        let name_term = match redir {
+            ast::ReadRedirect::File { file } => file,
+        };
+        let name = self.eval_term(&name_term)?;
+        let path: PathBuf = self.current_dir.join(name);
+        let file = fs::File::open(&path)?;
+        Ok(ReadStream::File(file))
+    }
+
+    /// Open a file for output redirection, returning the right WriteStream
+    fn eval_write_redirect(&self, redir: &ast::WriteRedirect) -> Result<WriteStream, Error> {
+        // Options to open any file for writing
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true);
+        opts.create(true);
+
+        // Figure out the filename, and if we're appending or not.
+        let name_term = match redir {
+            ast::WriteRedirect::TruncateFile { file } => {
+                opts.truncate(true);
+                file
+            }
+            ast::WriteRedirect::AppendFile { file } => {
+                opts.append(true);
+                file
+            }
+        };
+
+        // Open the file.
+        let name = self.eval_term(&name_term)?;
+        let path: PathBuf = self.current_dir.join(name);
+        let file = opts.open(&path)?;
+        Ok(WriteStream::File(file))
+    }
+
     /// Evaluate the given command, returning its exit code.
     pub fn eval_command(&mut self, cmd: &ast::Command) -> Result<Exit, Error> {
+        // Figure out the stdin for the left end of the pipeline
+        let cmd_stdin = match &cmd.stdin_redirect {
+            Some(redir) => self.eval_read_redirect(redir)?,
+            None => self.ios.stdin.try_clone()?, // If not redirected, inherit from the parent.
+        };
+
+        // Figure out the stdout for the right end of the pipeline
+        let cmd_stdout = match &cmd.stdout_redirect {
+            Some(redir) => self.eval_write_redirect(redir)?,
+            None => self.ios.stdout.try_clone()?, // If not redirected, inherit from the parent.
+        };
+
+        // The IO streams for the pipeline as a whole
+        let pipeline_ends = Streams {
+            stdin: cmd_stdin,
+            stdout: cmd_stdout,
+            stderr: self.ios.stderr.try_clone()?, // always passed through to parent
+        };
+
         // Set up all the plumbing we're going to need to connect processes in the pipeline
         // together.
-        let io_streams: Vec<Streams> =
-            self.make_plumbing(&cmd.pipeline.iter().collect::<Vec<_>>())?;
+        let io_streams: Vec<Streams> = self.make_stream_chain(pipeline_ends, cmd.pipeline.len())?;
 
         // Configure all the processes, consuming the IO streams
         let mut children: Vec<Box<dyn Wait>> = Vec::with_capacity(cmd.pipeline.len());
@@ -116,108 +172,37 @@ impl Interpreter {
         }
     }
 
-    /// Create a series of [`Streams`] instances which will accurately plumb together a list of
-    /// processes which form a pipeline.
-    ///
-    /// The stdin of the first process, the stdout of the last process, and the stderr of all
-    /// processes, will be connected to `self.ios`.
-    ///
-    /// If a redirect is given for any process, we open the appropriate file, and connect the file to
-    /// either stdin or stdout appropriately. This process will not communicate with its adjacent
-    /// processes in the pipeline.
-    ///
-    /// Otherwise, an OS-level pipe will be created to connect each process's stdout to the next
-    /// process's stdin.
-    ///
-    fn make_plumbing(&self, pipeline: &[&ast::Invocation]) -> Result<Vec<Streams>, Error> {
-        let mut ios: Vec<Streams> = Vec::with_capacity(pipeline.len());
-        for i in 0..pipeline.len() {
-            // We need to special-case the first and last invocation in the pipeline,
-            // because their stdio needs to be connected through to the shell's
-            let first = i == 0;
-            let last = i == pipeline.len() - 1;
+    /// Create a series of `length` [`Streams`] instances in a (stdout -> stdin) chain.
+    fn make_stream_chain(&self, ends: Streams, length: usize) -> Result<Vec<Streams>, Error> {
+        assert!(length > 0, "cannot make stream chain with length <= 1");
 
-            let inv = pipeline[i];
+        // Start with a bunch of null streams, one for each item in the pipeline.
+        let mut ios: Vec<Streams> = (0..length).map(|_| Streams::null()).collect();
 
-            // ------
-            // --- Determine stdout
-            let stdout = if let Some(redir) = &inv.stdout_redirect {
-                // Options to open any file for writing
-                let mut opts = fs::OpenOptions::new();
-                opts.write(true);
-                opts.create(true);
+        // Make a bunch of pipes between stages, and attach them
+        for i in 1..length {
+            // Connect a pipe to the previous link
+            let (read, write) = stream_pipe()?;
 
-                // Figure out the filename, and if we're appending or not.
-                let name_term = match redir {
-                    ast::WriteRedirect::TruncateFile { file } => {
-                        opts.truncate(true);
-                        file
-                    }
-                    ast::WriteRedirect::AppendFile { file } => {
-                        opts.append(true);
-                        file
-                    }
-                };
+            // Give this process the read half
+            ios[i].stdin = read;
 
-                // Open the file.
-                let name = self.eval_term(name_term)?;
-                let path: PathBuf = self.current_dir.join(name);
-                let file = opts.open(&path)?;
-                WriteStream::File(file)
-            } else if last {
-                // Here, we're last in the pipeline---connect to the stdout of the interpreter
-                self.ios.stdout.try_clone()?
-            } else {
-                // If we're not redirected, or last, our output is either:
-                //  - piped into the next process, which will get taken care of on the next loop
-                //    iteration, or
-                //  - ignored, so we let the Null stand
-                WriteStream::Null
-            };
-
-            // ------
-            // --- Determine stdin
-            let stdin = if let Some(redir) = &inv.stdin_redirect {
-                // Here, we have our input redirected. Open the file and connect that.
-                let name_term = match redir {
-                    ast::ReadRedirect::File { file } => file,
-                };
-                let name = self.eval_term(name_term)?;
-                let path: PathBuf = self.current_dir.join(name);
-                let file = fs::File::open(&path)?;
-                ReadStream::File(file)
-            } else if first {
-                // Here, we're first in the pipeline, with no redirects.
-                // Connect stdin to the parent interpreter.
-                self.ios.stdin.try_clone()?
-            } else if pipeline[i - 1].stdout_redirect.is_none() {
-                // If the last command didn't have its output redirected, we need to connect it to
-                // the input of this process.
-
-                // Create an OS pipe between processes
-                let (read, write) = stream_pipe()?;
-
-                // Give the output of the last process the write half
-                ios[i - 1].stdout = write;
-
-                // Give the input of this process the read half
-                read
-            } else {
-                // Here, the previous process's input was redirected somewhere.
-                // We have no input---so we use the null readstream.
-                ReadStream::Null
-            };
-
-            // Stderr is (for now) not redirected
-            let stderr = self.ios.stderr.try_clone()?;
-
-            // Add the stream configuration to the list
-            ios.push(Streams {
-                stdin,
-                stdout,
-                stderr,
-            });
+            // Give the previous process in the chain the write half
+            // (note: i in 1..length, skipping first element)
+            ios[i - 1].stdout = write;
         }
+
+        // Make a bunch of stderr clones, and attach them to every stage
+        for i in 1..length {
+            ios[i].stderr = ends.stderr.try_clone()?; // dup() the stream
+        }
+        ios[0].stderr = ends.stderr; // move the stream, avoiding extra dup()
+
+        // Connect stdin to the first element
+        ios[0].stdin = ends.stdin;
+
+        // Connect stdout to the last element
+        ios[length - 1].stdout = ends.stdout;
 
         // Return the list of stream configurations
         Ok(ios)

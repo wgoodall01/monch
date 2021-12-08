@@ -122,6 +122,7 @@ impl From<WriteStream> for process::Stdio {
 }
 
 /// Data streams for stdin, stdout, and stderr.
+#[derive(Debug)]
 pub struct Streams {
     pub stdin: ReadStream,
     pub stdout: WriteStream,

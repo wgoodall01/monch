@@ -4,7 +4,6 @@ use pest::{
     Span,
 };
 use pest_derive::Parser;
-use thiserror::Error;
 
 /// Generate a parser from the grammar in `monch.pest`
 /// This also generates the `Rule` enum, in the scope of the module.
@@ -12,11 +11,7 @@ use thiserror::Error;
 #[grammar = "monch.pest"]
 pub struct PestParser;
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("failed to parse: {0}")]
-    Syntax(pest::error::Error<Rule>),
-}
+pub type Error = pest::error::Error<Rule>;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -31,7 +26,7 @@ impl Parser {
     /// Parse `source` with the generated parser according to the given `rule`.
     fn parse_rule<'s>(&self, input: &'s str, rule: Rule) -> Result<Pair<'s, Rule>> {
         use pest::Parser;
-        let mut result = PestParser::parse(rule, input).map_err(Error::Syntax)?;
+        let mut result = PestParser::parse(rule, input)?;
         let found = result.next().expect("expected to parse some input");
         assert_eq!(result.next(), None, "found extra input in parse_rule");
         Ok(found)
@@ -70,20 +65,57 @@ impl Parser {
     fn p_command(&self, input: Pair<Rule>) -> Result<ast::Command> {
         let mut ctx = Context::unpack(input, Rule::Command);
 
-        // Parse each invocation
-        let invocations = ctx
-            .inner()
-            .map(|p| self.p_invocation(p))
-            .collect::<Result<_>>()?;
+        // Get each inner invocation rule
+        let inv_rules = ctx.inner().collect::<Vec<Pair<Rule>>>();
+        let inv_rules_len = inv_rules.len();
+
+        let mut invocations: Vec<ast::Invocation> = vec![];
+        let mut read_redirect: Option<ast::ReadRedirect> = None;
+        let mut write_redirect: Option<ast::WriteRedirect> = None;
+
+        for (i, pair) in inv_rules.into_iter().enumerate() {
+            // The first item can redirect input, the last can redirect output.
+            let can_redirect_input = i == 0;
+            let can_redirect_output = i == inv_rules_len - 1;
+
+            let (inv, stdin_redir, stdout_redir) =
+                self.p_invocation(pair, can_redirect_input, can_redirect_output)?;
+
+            // Record the invocation
+            invocations.push(inv);
+
+            // Check for a stdin redirect
+            if let Some(r) = stdin_redir {
+                assert!(read_redirect.is_none());
+                read_redirect = Some(r)
+            }
+
+            // Check for a stdout redirect
+            if let Some(r) = stdout_redir {
+                assert!(write_redirect.is_none());
+                write_redirect = Some(r)
+            }
+        }
 
         ctx.done();
 
         Ok(ast::Command {
             pipeline: invocations,
+            stdin_redirect: read_redirect,
+            stdout_redirect: write_redirect,
         })
     }
 
-    fn p_invocation(&self, input: Pair<Rule>) -> Result<ast::Invocation> {
+    fn p_invocation(
+        &self,
+        input: Pair<Rule>,
+        can_redirect_input: bool,
+        can_redirect_output: bool,
+    ) -> Result<(
+        ast::Invocation,
+        Option<ast::ReadRedirect>,
+        Option<ast::WriteRedirect>,
+    )> {
         let mut ctx = Context::unpack(input, Rule::Invocation);
 
         let exe = ctx.match_rule(Rule::Term);
@@ -100,19 +132,33 @@ impl Parser {
                 // Parse an argument
                 Rule::Term => arguments.push(self.p_term(pair)?),
 
-                Rule::ReadRedirect => match read_redirect {
+                // Handle a read redirect
+                Rule::ReadRedirect if can_redirect_input => match read_redirect {
                     None => read_redirect = Some(self.p_read_redirect(pair)?),
                     Some(_) => {
                         return Err(make_error(&pair, "found conflicting input redirection"))
                     }
                 },
+                Rule::ReadRedirect if !can_redirect_input => {
+                    return Err(make_error(
+                        &pair,
+                        "cannot redirect input outside unless it's from the first command in a pipeline",
+                    ))
+                }
 
-                Rule::WriteRedirect => match write_redirect {
+                // Handle a write redirect
+                Rule::WriteRedirect if can_redirect_output => match write_redirect {
                     None => write_redirect = Some(self.p_write_redirect(pair)?),
                     Some(_) => {
                         return Err(make_error(&pair, "found conflicting output redirection"))
                     }
                 },
+                Rule::WriteRedirect if !can_redirect_output => {
+                    return Err(make_error(
+                        &pair,
+                        "cannot redirect output unless it's from the last command in a pipeline",
+                    ))
+                }
 
                 _ => unreachable!("unexpected rule inside Invocation"),
             }
@@ -120,12 +166,14 @@ impl Parser {
 
         ctx.done();
 
-        Ok(ast::Invocation {
-            executable: self.p_term(exe)?,
-            arguments,
-            stdin_redirect: read_redirect,
-            stdout_redirect: write_redirect,
-        })
+        Ok((
+            ast::Invocation {
+                executable: self.p_term(exe)?,
+                arguments,
+            },
+            read_redirect,
+            write_redirect,
+        ))
     }
 
     fn p_read_redirect(&self, input: Pair<Rule>) -> Result<ast::ReadRedirect> {
@@ -226,9 +274,7 @@ fn make_error(failing: &Pair<Rule>, message: impl AsRef<str>) -> Error {
         message: message.as_ref().to_string(),
     };
 
-    let pest_err = pest::error::Error::new_from_span(kind, failing.as_span());
-
-    Error::Syntax(pest_err)
+    pest::error::Error::new_from_span(kind, failing.as_span())
 }
 
 /// A context to make dealing with Pest inner Pairs easier

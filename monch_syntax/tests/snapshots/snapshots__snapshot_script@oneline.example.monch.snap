@@ -18,14 +18,14 @@ commands:
               value: again
           - Literal:
               value: three
-        stdin_redirect:
-          File:
-            file:
-              Literal:
-                value: input
-        stdout_redirect:
-          AppendFile:
-            file:
-              Literal:
-                value: output
+    stdin_redirect:
+      File:
+        file:
+          Literal:
+            value: input
+    stdout_redirect:
+      AppendFile:
+        file:
+          Literal:
+            value: output
 

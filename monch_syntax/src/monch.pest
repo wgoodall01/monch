@@ -25,6 +25,8 @@ WRedirTruncateFile = { ">" ~ Term }
 WRedirAppendFile = { ">>" ~ Term }
 
 // A single command invocation, followed optionally by some arguments.
+// Note: Read redirects are only valid in the FIRST position of a pipeline
+// Note: Write redirects are only valid in the LAST position of a pipeline
 Invocation = { Term ~ (Term | ReadRedirect | WriteRedirect)* }
 
 // A command composed potentially of several commands piped together.
