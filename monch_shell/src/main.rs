@@ -1,6 +1,14 @@
 use monch_syntax::Parser;
 use owo_colors::OwoColorize;
+use rustyline::completion::Completer;
+use rustyline::completion::FilenameCompleter;
+use rustyline::completion::Pair;
 use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::line_buffer::LineBuffer;
+use rustyline::validate::Validator;
+use rustyline::Context;
 use std::env;
 
 pub(crate) mod builtin;
@@ -16,7 +24,8 @@ use interpreter::Interpreter;
 use streams::Streams;
 
 fn main() {
-    let mut rl = rustyline::Editor::<()>::new();
+    let mut rl = rustyline::Editor::new();
+    rl.set_helper(Some(Helper::new()));
 
     let stdio = Streams::stdio().expect("couldn't open stdio");
     let workdir = env::current_dir().expect("bad working directory");
@@ -36,6 +45,9 @@ fn main() {
                     continue;
                 }
 
+                // Add the line as a history entry
+                rl.add_history_entry(&line);
+
                 // Parse the command line
                 let cmd = match parser.parse_command(&line) {
                     Ok(cmd) => cmd,
@@ -43,7 +55,7 @@ fn main() {
                     // Handle parse errors by printing them, setting last_exit, and skipping
                     // evaluation.
                     Err(e) => {
-                        println!("monch: {}", e);
+                        eprintln!("monch: {}", e);
                         last_exit = Exit::BAD_SYNTAX;
                         continue;
                     }
@@ -55,7 +67,7 @@ fn main() {
 
                     // Handle errors by printing them and setting last_exit.
                     Err(e) => {
-                        println!("monch: {}", e);
+                        eprintln!("monch: {}", e);
                         e.as_exit()
                     }
                 };
@@ -67,12 +79,55 @@ fn main() {
                 break;
             }
             Err(err) => {
-                println!("error reading line: {:?}", err);
+                eprintln!("error reading line: {:?}", err);
                 break;
             }
         }
+
+        // Update the actual working directory of this process to that of the interpreter
+        if let Err(e) = env::set_current_dir(interpreter.current_dir()) {
+            eprintln!("monch: could not update working directory: {}", e);
+        }
     }
 }
+
+struct Helper {
+    completer: FilenameCompleter,
+}
+
+impl Helper {
+    fn new() -> Helper {
+        Helper {
+            completer: FilenameCompleter::new(),
+        }
+    }
+}
+
+impl rustyline::Helper for Helper {}
+
+impl Completer for Helper {
+    type Candidate = Pair;
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        self.completer.complete(line, pos, ctx)
+    }
+
+    fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
+        self.completer.update(line, start, elected)
+    }
+}
+
+impl Hinter for Helper {
+    type Hint = String;
+}
+
+impl Highlighter for Helper {}
+
+impl Validator for Helper {}
 
 /// Generate a shell prompt
 fn prompt(int: &Interpreter, last_exit: Exit) -> String {
