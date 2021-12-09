@@ -43,6 +43,145 @@ And to run the tests, run:
 cargo test
 ```
 
+## Examples
+
+You can run any command on your system in `monch`, and you'll get the output in your shell just like you normally would:
+
+```sh
+/ $ ps
+    PID TTY          TIME CMD
+ 292799 pts/1    00:00:00 bash
+ 292837 pts/1    00:00:00 monch
+ 293052 pts/1    00:00:00 ps
+```
+
+However, if you run a Monch-aware command (like our re-implentation of `ls`, for example), you'll see structured output instead:
+
+```sh
+/ $ ls -la
+{name: etc, kind: Dir}
+{name: mnt, kind: Dir}
+{name: run, kind: Dir}
+{name: var, kind: Dir}
+{name: cdrom, kind: Dir}
+{name: usr, kind: Dir}
+{name: lib, kind: Unknown}
+{name: srv, kind: Dir}
+{name: root, kind: Dir}
+{name: media, kind: Dir}
+{name: snap, kind: Dir}
+{name: sys, kind: Dir}
+{name: boot, kind: Dir}
+{name: opt, kind: Dir}
+{name: lib32, kind: Unknown}
+{name: home, kind: Dir}
+{name: libx32, kind: Unknown}
+{name: dev, kind: Dir}
+{name: proc, kind: Dir}
+{name: lib64, kind: Unknown}
+{name: sbin, kind: Unknown}
+{name: swapfile, kind: File}
+{name: bin, kind: Unknown}
+{name: tmp, kind: Dir}
+```
+
+You can manipulate streams of objects:
+
+- Use the `get` command to extract a field
+- Use the `grep` command to filter by a string field's contents
+
+So, to get a list of only the directories in the root, you would run:
+
+```sh
+/ $ ls -la | grep -f .kind Dir
+{name: etc, kind: Dir}
+{name: mnt, kind: Dir}
+{name: run, kind: Dir}
+{name: var, kind: Dir}
+{name: cdrom, kind: Dir}
+{name: usr, kind: Dir}
+{name: srv, kind: Dir}
+{name: root, kind: Dir}
+{name: media, kind: Dir}
+{name: snap, kind: Dir}
+{name: sys, kind: Dir}
+{name: boot, kind: Dir}
+{name: opt, kind: Dir}
+{name: home, kind: Dir}
+{name: dev, kind: Dir}
+{name: proc, kind: Dir}
+{name: tmp, kind: Dir}
+{name: lost+found, kind: Dir}
+```
+
+Then, if you wanted a list of only the **names** of directories in the root, you would run:
+
+```sh
+/ $ ls -la | grep -f .kind Dir | get .name
+etc
+mnt
+run
+var
+cdrom
+usr
+srv
+root
+media
+snap
+sys
+boot
+opt
+home
+dev
+proc
+tmp
+lost+found
+```
+
+You could also save the file records you wanted into a file, and load them for use later:
+
+```sh
+/ $ ls -la | grep -f .kind Dir >files.cbor
+
+/ $ get <files.cbor .name
+etc
+mnt
+run
+# ...etc.
+
+/ $ get <files.cbor .name | sed etc 'something else here'
+something else here
+mnt
+run
+```
+
+The shell can also catch common type errors, if it knows that you're attempting to pipe together two commands that expect different kinds of data:
+
+```sh
+/ $ ps | get
+monch: type mismatch: cannot connect [unknown] (produced by ps) to cbor (expected by get)
+```
+
+It will also fail with an error if you perform a an I/O redirection that ignores data, like one in the middle of the pipeline:
+
+```sh
+/ $ echo test >file | cat
+monch:  --> 1:11
+  |
+1 | echo test >file | cat
+  |           ^---^
+  |
+  = cannot redirect output unless it's from the last command in a pipeline
+
+/ $ echo test | cat <file
+monch:  --> 1:12
+  |
+1 | cat | echo <file
+  |            ^---^
+  |
+  = cannot redirect input outside unless it's from the first command in a pipeline
+```
+
 ## Continuous Integration
 
 For each commit, we run the test suite across Mac, Windows, and Linux in [GitHub Actions](https://github.com/wgoodall01/monch/actions).
