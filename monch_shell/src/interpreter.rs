@@ -70,7 +70,7 @@ impl Interpreter {
         // If the last stage is giving CBOR output, sneakily insert a formatter.
         let final_stage = stages.last().expect("non-empty pipeline");
         let final_type = final_stage.exe.output_type(&final_stage.args);
-        if final_type == Ty::Cbor {
+        if final_type == Ty::Cbor && !cmd.stdout_redirect.is_some() {
             stages.push(Stage {
                 command: "to".to_string(),
                 exe: Box::new(builtin::To),
