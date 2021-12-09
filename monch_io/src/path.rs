@@ -10,7 +10,7 @@ impl DataPath {
     /// Parse a `jq`-like string path, in the form `outer.inner.1`.
     ///
     /// Works by converting each `.`-separated path segment into either a CBOR
-    /// [`Integer`](cborium::Integer), or a String key.
+    /// [`Integer`](ciborium::value::Integer), or a String key.
     pub fn parse(path: &str) -> DataPath {
         let parsed_parts = path
             .split('.')
