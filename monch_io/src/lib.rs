@@ -3,6 +3,7 @@ use std::{io, iter};
 use thiserror::Error;
 
 /// Re-export the `cbor!` macro to implement our `put!` macro
+pub use ciborium;
 pub use ciborium::cbor;
 pub use ciborium::value::Value;
 
@@ -53,7 +54,21 @@ macro_rules! try_put {
 /// Writes an object for machines to standard out. If the write fails, panic.
 #[macro_export]
 macro_rules! put {
-    ( $($toks:tt) * ) => { ::monch_io::try_put!( $($toks) * ).expect("failed to put object") };
+    ( $($toks:tt) * ) => {{
+        let result = ::monch_io::try_put!( $($toks) * );
+
+        if let Err(::monch_io::Error::Serialize(::monch_io::ciborium::ser::Error::Io(ref ioe))) = result {
+            if ioe.kind() == ::std::io::ErrorKind::BrokenPipe {
+                ::std::process::exit(0); // gracefully die on a SIGPIPE
+            }
+        }
+
+        if let Err(e) = result {
+            eprintln!("failed to write object: {}", e);
+            ::std::process::exit(1);
+        }
+
+    }};
 }
 
 /// Write a serializable object to structured stdout.
@@ -70,24 +85,30 @@ pub fn read_one<'a, T: Deserialize<'a>>() -> Result<T, Error> {
 
 /// Read a series of deserializable objects from structured stdin, stopping when stdin is closed.
 pub fn input_stream<T: Deserialize<'static>>() -> impl Iterator<Item = Result<T, Error>> {
-    // 64-byte input buffer. Short because input lines are short.
-    let buffer = io::BufReader::with_capacity(64, io::stdin());
-
-    // Construct an input parser iterator
-    InputParser {
-        buffer,
-        _phantom_type: Default::default(),
-    }
+    InputParser::new(io::stdin())
 }
 
-struct InputParser<T> {
-    buffer: io::BufReader<io::Stdin>,
+pub struct InputParser<T, R> {
+    buffer: io::BufReader<R>,
 
     // so that we can use the T generic without storing a T
     _phantom_type: std::marker::PhantomData<T>,
 }
 
-impl<T: Deserialize<'static>> iter::Iterator for InputParser<T> {
+impl<T, R: io::Read> InputParser<T, R> {
+    pub fn new(reader: R) -> Self {
+        // 64-byte input buffer. Short because input lines are short.
+        let buffer = io::BufReader::with_capacity(64, reader);
+
+        // Construct an input parser iterator
+        InputParser {
+            buffer,
+            _phantom_type: Default::default(),
+        }
+    }
+}
+
+impl<T: Deserialize<'static>, R: io::Read> iter::Iterator for InputParser<T, R> {
     type Item = Result<T, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {

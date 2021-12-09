@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {
@@ -13,6 +14,12 @@ pub enum Ty {
 
     /// Stream of CBOR-encoded binary data
     Cbor,
+
+    /// Human-readable lines of text
+    Text,
+
+    /// TTY text, containing ANSI escape codes.
+    Tty,
 }
 
 impl fmt::Display for Ty {
@@ -23,8 +30,26 @@ impl fmt::Display for Ty {
             Unknown => "[unknown]",
             Nothing => "[nothing]",
             Cbor => "cbor",
+            Text => "text",
+            Tty => "tty",
         };
         write!(f, "{}", name)
+    }
+}
+
+impl FromStr for Ty {
+    type Err = ();
+
+    fn from_str(ty_name: &str) -> Result<Ty, Self::Err> {
+        let lower = ty_name.trim().to_lowercase();
+        match lower.as_str() {
+            "cbor" => Ok(Ty::Cbor),
+            "text" => Ok(Ty::Text),
+            "tty" => Ok(Ty::Tty),
+
+            // For now, don't allow construction of Any/Unknown/Nothing with FromStr
+            _ => Err(()),
+        }
     }
 }
 

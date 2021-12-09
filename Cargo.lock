@@ -429,12 +429,15 @@ dependencies = [
 name = "monch_shell"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "itertools",
  "lazy_static",
+ "monch_io",
  "monch_syntax",
  "os_pipe",
  "owo-colors",
  "rustyline",
+ "serde",
  "thiserror",
  "which",
 ]

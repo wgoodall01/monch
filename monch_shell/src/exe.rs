@@ -2,6 +2,8 @@ use crate::{interpreter::Interpreter, streams::Streams, types::Ty, Error};
 use std::path::{Path, PathBuf};
 use std::{fmt, process, thread};
 
+pub type Args = Vec<String>;
+
 /// An executable program or builtin.
 pub trait Execute {
     /// Execute the program, given a mutable reference to the parent Interpreter.
@@ -12,14 +14,14 @@ pub trait Execute {
         &self,
         int: &mut Interpreter,
         ios: Streams,
-        args: &[&str],
+        args: &Args,
     ) -> Result<Box<dyn Wait>, Error>;
 
     /// The type of data we're expecting to receive on stdin.
-    fn input_type(&self, _args: &[&str]) -> Ty;
+    fn input_type(&self, _args: &Args) -> Ty;
 
     /// The type of data we're going to output on stdout.
-    fn output_type(&self, _args: &[&str]) -> Ty;
+    fn output_type(&self, _args: &Args) -> Ty;
 }
 
 /// Implement [`Execute`] for references to [`Execute`]
@@ -28,17 +30,17 @@ impl<T: Execute + ?Sized> Execute for &T {
         &self,
         int: &mut Interpreter,
         ios: Streams,
-        args: &[&str],
+        args: &Args,
     ) -> Result<Box<dyn Wait>, Error> {
         (*self).execute(int, ios, args)
     }
 
-    fn input_type(&self, args: &[&str]) -> Ty {
+    fn input_type(&self, args: &Args) -> Ty {
         (*self).input_type(args)
     }
 
-    fn output_type(&self, args: &[&str]) -> Ty {
-        (*self).input_type(args)
+    fn output_type(&self, args: &Args) -> Ty {
+        (*self).output_type(args)
     }
 }
 
@@ -83,7 +85,7 @@ impl Execute for ExternalExecutable {
         &self,
         int: &mut Interpreter,
         ios: Streams,
-        args: &[&str],
+        args: &Args,
     ) -> Result<Box<dyn Wait>, Error> {
         // Create the command
         let mut cmd = process::Command::new(&self.binary);
@@ -102,11 +104,11 @@ impl Execute for ExternalExecutable {
         Ok(wait_handle)
     }
 
-    fn input_type(&self, _args: &[&str]) -> Ty {
+    fn input_type(&self, _args: &Args) -> Ty {
         self.input_type
     }
 
-    fn output_type(&self, _args: &[&str]) -> Ty {
+    fn output_type(&self, _args: &Args) -> Ty {
         self.output_type
     }
 }

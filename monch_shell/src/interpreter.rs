@@ -1,4 +1,4 @@
-use crate::builtin::BUILTINS;
+use crate::builtin::{self, BUILTINS};
 use crate::exe::{Execute, Exit, ExternalExecutable, Wait};
 use crate::streams::{stream_pipe, ReadStream, Streams, WriteStream};
 use crate::types::{can_connect, Ty};
@@ -28,147 +28,91 @@ impl Interpreter {
         }
     }
 
-    /// Get the current working directory of the Interpreter
-    pub fn current_dir(&self) -> &Path {
-        &self.current_dir
-    }
-
-    /// Set the current working directory of the Interpreter.
-    /// This will fail if we're given a path that cannot be canonicalized, or a path that is not a
-    /// directory.
-    pub fn set_current_dir(&mut self, new_cwd: impl AsRef<Path>) -> Result<(), Error> {
-        // Canonicalize the path
-        let new_cwd = new_cwd.as_ref().canonicalize()?;
-
-        // Check our working directory is actually a directory
-        if !new_cwd.is_dir() {
-            return Err(Error::BadWorkingDirectory(
-                new_cwd.to_string_lossy().to_string(),
-            ));
-        }
-
-        // Update the cwd
-        self.current_dir = new_cwd;
-
-        Ok(())
-    }
-
-    /// Open a file for input redirection, returning the right ReadStream
-    fn eval_read_redirect(&self, redir: &ast::ReadRedirect) -> Result<ReadStream, Error> {
-        // Here, we have our input redirected. Open the file and connect that.
-        let name_term = match redir {
-            ast::ReadRedirect::File { file } => file,
-        };
-        let name = self.eval_term(name_term)?;
-        let path: PathBuf = self.current_dir.join(name);
-        let file = fs::File::open(&path)?;
-        Ok(ReadStream::File(file))
-    }
-
-    /// Open a file for output redirection, returning the right WriteStream
-    fn eval_write_redirect(&self, redir: &ast::WriteRedirect) -> Result<WriteStream, Error> {
-        // Options to open any file for writing
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true);
-        opts.create(true);
-
-        // Figure out the filename, and if we're appending or not.
-        let name_term = match redir {
-            ast::WriteRedirect::TruncateFile { file } => {
-                opts.truncate(true);
-                file
-            }
-            ast::WriteRedirect::AppendFile { file } => {
-                opts.append(true);
-                file
-            }
-        };
-
-        // Open the file.
-        let name = self.eval_term(name_term)?;
-        let path: PathBuf = self.current_dir.join(name);
-        let file = opts.open(&path)?;
-        Ok(WriteStream::File(file))
-    }
-
     /// Evaluate the given command, returning its exit code.
     pub fn eval_command(&mut self, cmd: &ast::Command) -> Result<Exit, Error> {
-        // Figure out the stdin for the left end of the pipeline
-        let cmd_stdin = match &cmd.stdin_redirect {
-            Some(redir) => self.eval_read_redirect(redir)?,
-            None => self.ios.stdin.try_clone()?, // If not redirected, inherit from the parent.
-        };
-
-        // Figure out the stdout for the right end of the pipeline
-        let cmd_stdout = match &cmd.stdout_redirect {
-            Some(redir) => self.eval_write_redirect(redir)?,
-            None => self.ios.stdout.try_clone()?, // If not redirected, inherit from the parent.
-        };
-
-        // The IO streams for the pipeline as a whole
-        let pipeline_ends = Streams {
-            stdin: cmd_stdin,
-            stdout: cmd_stdout,
-            stderr: self.ios.stderr.try_clone()?, // always passed through to parent
-        };
-
-        // Set up all the plumbing we're going to need to connect processes in the pipeline
-        // together.
-        let io_streams: Vec<Streams> = self.make_stream_chain(pipeline_ends, cmd.pipeline.len())?;
-
-        // Evaluate all the command arguments
-        let arguments: Vec<Vec<String>> = cmd
-            .pipeline
-            .iter()
-            .map(|inv| {
-                inv.arguments
-                    .iter()
-                    .map(|t| self.eval_term(t))
-                    .collect::<Result<_, _>>()
-            })
-            .collect::<Result<_, _>>()?;
-
-        let arguments_as_ref: Vec<Vec<&str>> = arguments
-            .iter()
-            .map(|inv| inv.iter().map(String::as_str).collect())
-            .collect();
-
-        // Configure all the processes, consuming the IO streams
-        let mut executables: Vec<Box<dyn Execute>> = Vec::with_capacity(cmd.pipeline.len());
-        for inv in &cmd.pipeline {
-            // Evaluate the name of the binary
-            let bin_name = self.eval_term(&inv.executable)?;
-
-            // Resolve the executable to an actual thing we can run
-            let exe = self.resolve_exe(&bin_name)?;
-
-            executables.push(exe)
+        // Empty pipelines are successful no-ops.
+        if cmd.pipeline.len() < 1 {
+            return Ok(Exit::SUCCESS);
         }
 
-        // Type-check the pipeline.
-        for ((l_inv, l_exe, l_args), (r_inv, r_exe, r_args)) in
-            izip!(&cmd.pipeline, &executables, &arguments_as_ref).tuple_windows()
-        {
-            let l_output = l_exe.output_type(l_args);
-            let r_input = r_exe.input_type(r_args);
+        /// A stage in the pipeline, before execution.
+        struct Stage {
+            /// The name of the command being invoked.
+            command: String,
+
+            /// This stage's executable.
+            exe: Box<dyn Execute>,
+
+            /// The evaluated arguments for this stage's executable.
+            args: Vec<String>,
+        }
+
+        // Calculate all the stages of the pipeline
+        let mut stages: Vec<Stage> = vec![];
+        for inv in &cmd.pipeline {
+            // Evaluate the name of the binary
+            let command = self.eval_term(&inv.executable)?;
+
+            // Evaluate the arguments
+            let args: Vec<String> = inv
+                .arguments
+                .iter()
+                .map(|t| self.eval_term(t))
+                .collect::<Result<_, _>>()?;
+
+            // Resolve the executable to an actual thing we can run
+            let exe = self.resolve_exe(&command)?;
+
+            // Add the stage
+            stages.push(Stage { exe, command, args });
+        }
+
+        // If the last stage is giving CBOR output, sneakily insert a formatter.
+        let final_stage = stages.last().expect("non-empty pipeline");
+        let final_type = final_stage.exe.output_type(&final_stage.args);
+        if final_type == Ty::Cbor {
+            stages.push(Stage {
+                command: "to".to_string(),
+                exe: Box::new(builtin::To),
+                args: vec!["tty".to_string()],
+            });
+        }
+
+        // Type-check the pipeline
+        for (l, r) in stages.iter().tuple_windows() {
+            let l_output = l.exe.output_type(&l.args);
+            let r_input = r.exe.input_type(&r.args);
 
             if !can_connect(l_output, r_input) {
                 return Err(Error::TypeMismatch {
-                    l_cmd: self.eval_term(&l_inv.executable)?,
+                    l_cmd: l.command.clone(),
                     l_ty: l_output,
-                    r_cmd: self.eval_term(&r_inv.executable)?,
+                    r_cmd: r.command.clone(),
                     r_ty: r_input,
                 });
             }
         }
 
+        // Create all the plumbing we're going to need to connect processes in the pipeline
+        // together. Do this by evaluating the redirects on either end of the pipeline if they
+        // exist, and otherwise connecting the pipeline ends to the parent streams.
+        let pipeline_ends = Streams {
+            stdin: match &cmd.stdin_redirect {
+                Some(redir) => self.eval_read_redirect(redir)?, // Read from a file
+                None => self.ios.stdin.try_clone()?, // If not redirected, inherit from the parent.
+            },
+            stdout: match &cmd.stdout_redirect {
+                Some(redir) => self.eval_write_redirect(redir)?, // Write into a file
+                None => self.ios.stdout.try_clone()?, // If not redirected, inherit from the parent.
+            },
+            stderr: self.ios.stderr.try_clone()?, // always passed through to parent
+        };
+        let io_streams: Vec<Streams> = self.make_stream_chain(pipeline_ends, stages.len())?;
+
         // Start all the processes
-        let mut children: Vec<Box<dyn Wait>> = Vec::with_capacity(cmd.pipeline.len());
-        for (exe, args, streams) in izip!(&executables, &arguments_as_ref, io_streams) {
-            // Start up the child proces, with its IO hooked up correctly
-            let child = exe.execute(self, streams, args)?;
-            children.push(child);
-        }
+        let children: Vec<Box<dyn Wait>> = izip!(&stages, io_streams)
+            .map(|(stage, ios)| stage.exe.execute(self, ios, &stage.args))
+            .collect::<Result<_, _>>()?;
 
         // Wait for all the child processes to finish
         let exit_codes: Vec<Exit> = children
@@ -237,6 +181,44 @@ impl Interpreter {
         }
     }
 
+    /// Open a file for input redirection, returning the right ReadStream
+    fn eval_read_redirect(&self, redir: &ast::ReadRedirect) -> Result<ReadStream, Error> {
+        // Here, we have our input redirected. Open the file and connect that.
+        let name_term = match redir {
+            ast::ReadRedirect::File { file } => file,
+        };
+        let name = self.eval_term(name_term)?;
+        let path: PathBuf = self.current_dir.join(name);
+        let file = fs::File::open(&path)?;
+        Ok(ReadStream::File(file))
+    }
+
+    /// Open a file for output redirection, returning the right WriteStream
+    fn eval_write_redirect(&self, redir: &ast::WriteRedirect) -> Result<WriteStream, Error> {
+        // Options to open any file for writing
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true);
+        opts.create(true);
+
+        // Figure out the filename, and if we're appending or not.
+        let name_term = match redir {
+            ast::WriteRedirect::TruncateFile { file } => {
+                opts.truncate(true);
+                file
+            }
+            ast::WriteRedirect::AppendFile { file } => {
+                opts.append(true);
+                file
+            }
+        };
+
+        // Open the file.
+        let name = self.eval_term(name_term)?;
+        let path: PathBuf = self.current_dir.join(name);
+        let file = opts.open(&path)?;
+        Ok(WriteStream::File(file))
+    }
+
     /// Evaluate an [`ast::Term`] to a [`String`] value
     pub fn eval_term(&self, term: &ast::Term) -> Result<String, Error> {
         match term {
@@ -278,5 +260,30 @@ impl Interpreter {
 
         // Return the list of stream configurations
         Ok(ios)
+    }
+
+    /// Get the current working directory of the Interpreter
+    pub fn current_dir(&self) -> &Path {
+        &self.current_dir
+    }
+
+    /// Set the current working directory of the Interpreter.
+    /// This will fail if we're given a path that cannot be canonicalized, or a path that is not a
+    /// directory.
+    pub fn set_current_dir(&mut self, new_cwd: impl AsRef<Path>) -> Result<(), Error> {
+        // Canonicalize the path
+        let new_cwd = new_cwd.as_ref().canonicalize()?;
+
+        // Check our working directory is actually a directory
+        if !new_cwd.is_dir() {
+            return Err(Error::BadWorkingDirectory(
+                new_cwd.to_string_lossy().to_string(),
+            ));
+        }
+
+        // Update the cwd
+        self.current_dir = new_cwd;
+
+        Ok(())
     }
 }
