@@ -1,6 +1,6 @@
 # Monch
 
-A Structured Shell
+A Structured Shell.
 
 ## Structure
 
